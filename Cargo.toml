@@ -11,3 +11,6 @@ dasp = { version = "0.11.0", features = ["ring_buffer", "signal"] }
 cpal = "0.15.3"
 anyhow = "~1.0"
 thread-priority = "0.16"
+mlua = { version = "0.9.6", features = ["vendored", "lua54"] }
+clap = { version = "4.5.4", features = ["derive"] }
+num = "0.4.1"
