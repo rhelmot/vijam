@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{FromSample, SizedSample};
-use std::time::{Instant, Duration};
+use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use crate::render::RenderQueue;
 
@@ -56,10 +56,7 @@ where
 {
     let num_channels = config.channels as usize;
 
-    let buf = Arc::new(Mutex::new(RenderQueue::new(
-        config.sample_rate,
-        Instant::now(),
-    )));
+    let buf = Arc::new(Mutex::new(RenderQueue::new()));
 
     let stream = device.build_output_stream(
         config,

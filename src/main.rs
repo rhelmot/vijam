@@ -51,10 +51,11 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn main_start(config: PathBuf) -> anyhow::Result<()> {
-    let (config, instruments) = config::JamConfig::new(config)?;
+    let (mut config, instruments) = config::JamConfig::new(config)?;
     let (stream, buf) = output::stream_setup_for()?;
     let event_submission = render::setup_rendering(buf, instruments);
+    config.setup(event_submission);
     stream.play()?;
-    input::setup_input(event_submission, config).run().unwrap();
+    input::setup_input(config).run().unwrap();
     Ok(())
 }

@@ -8,6 +8,9 @@ local function mkInstrument(baseType, signalType) {
 		play = function(self, pitch, voice, duration)
 			return native.play(self.id, pitch, voice, duration)
 		end,
+		mute = function(self, voice)
+			return native.mute(self.id, voice)
+		end,
 		makeButton = function(self, pitch, voice)
 			return {
 				_cls = "button",

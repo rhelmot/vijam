@@ -1,11 +1,11 @@
-use cpal::SampleRate;
 use std::collections::BTreeMap;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
 use thread_priority::{ThreadBuilderExt, ThreadPriority};
 
 use crate::instrument::{Instrument, InstrumentEvent, Note, NoteEvent};
 use crate::JamEvent;
+
+pub type FrameInstant = u64;
 
 const MAX_BUFFER_SPECULATE_SIZE: usize = 1024;
 
@@ -13,12 +13,10 @@ pub struct RenderQueue {
     pub buffer: dasp::ring_buffer::Bounded<Box<[f32]>>,
     pub tail_frame: u64,
     pub last_consumed_size: u64,
-    pub sample_rate: SampleRate,
-    pub start_time: Instant,
 }
 
 impl RenderQueue {
-    pub fn new(sample_rate: SampleRate, start_time: Instant) -> Self {
+    pub fn new() -> Self {
         RenderQueue {
             buffer: dasp::ring_buffer::Bounded::from_raw_parts(
                 0,
@@ -27,29 +25,20 @@ impl RenderQueue {
             ),
             last_consumed_size: 0,
             tail_frame: 0,
-            sample_rate,
-            start_time,
         }
     }
 
-    pub fn sample_length(&self) -> Duration {
-        Duration::from_secs_f32(1f32 / self.sample_rate.0 as f32)
-    }
-
-    fn plus_sample_time(&self, samples_elapsed: u64) -> Instant {
-        let frame = self.tail_frame + samples_elapsed;
-        self.start_time
-            + self.sample_length() * frame as u32
-            + self.sample_length().mul_f32((frame >> 32) as f32)
+    fn plus_sample_time(&self, samples_elapsed: u64) -> FrameInstant {
+        self.tail_frame + samples_elapsed
     }
 
     /// The current timestamp at the head of the buffer, i.e. the insertion point
-    pub fn head_time(&self) -> Instant {
+    pub fn head_time(&self) -> FrameInstant {
         self.plus_sample_time(self.buffer.len() as u64)
     }
 
     /// The current timestamp at the head of the buffer, i.e. the extraction point
-    pub fn tail_time(&self) -> Instant {
+    pub fn tail_time(&self) -> FrameInstant {
         self.plus_sample_time(0)
     }
 }
@@ -66,7 +55,7 @@ pub fn setup_rendering(
             if let Err(e) = result {
                 eprintln!("Warning: Could not set thread priority: {e}")
             }
-            let mut voices = BTreeMap::<(u32, u32), (Instant, Box<dyn Note>)>::new();
+            let mut voices = BTreeMap::<(u32, u32), (FrameInstant, Box<dyn Note>)>::new();
             loop {
                 for event in recv.try_iter() {
                     let Some(event) = event else { return };
