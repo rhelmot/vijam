@@ -10,12 +10,14 @@ mod input;
 mod instrument;
 
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum JamParam {
-    Tempo(f32),
-    OtherFloat(String, f32),
+    Tempo(f64),
+    OtherFloat(String, f64),
     OtherString(String, String),
 }
 
+#[derive(Debug)]
 pub enum JamEvent {
     InstrumentEvent {
         instrument: u32,
@@ -51,8 +53,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn main_start(config: PathBuf) -> anyhow::Result<()> {
-    let (mut config, instruments) = config::JamConfig::new(config)?;
-    let (stream, buf) = output::stream_setup_for()?;
+    let (stream, buf, sample_rate) = output::stream_setup_for()?;
+    let (mut config, instruments) = config::JamConfig::new(config, sample_rate)?;
     let event_submission = render::setup_rendering(buf, instruments);
     config.setup(event_submission);
     stream.play()?;

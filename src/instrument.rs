@@ -13,24 +13,25 @@ impl<T, S> CloneSignal for T where T: 'static + Clone + Signal<Frame = S> {
     }
 }
 
+#[derive(Debug)]
 pub enum NoteParam {
-    Pitch(f32),
-    Amplitude(f32),
-    Articulation(f32),
+    Pitch(f64),
+    Amplitude(f64),
+    Articulation(f64),
     Other(String, MiscValue),
 }
 
 #[derive(Clone, Debug)]
 pub enum MiscValue {
-    Float(f32),
+    Float(f64),
     String(String),
 }
 
 #[derive(Clone, Debug)]
 pub struct NoteParams {
-    pub pitch: f32,
-    pub amplitude: f32,
-    pub articulation: f32,
+    pub pitch: f64,
+    pub amplitude: f64,
+    pub articulation: f64,
     pub other: HashMap<String, MiscValue>,
 }
 
@@ -51,6 +52,7 @@ impl NoteParams {
     }
 }
 
+#[derive(Debug)]
 pub enum InstrumentParam {
     NextNote(NoteParam),
     Other(String, MiscValue),
@@ -59,7 +61,7 @@ pub enum InstrumentParam {
 pub trait Note {
     fn set_param(&mut self, param: NoteParam);
     fn mute(&mut self);
-    fn render(&mut self, time: FrameInstant) -> f32;
+    fn render(&mut self, time: FrameInstant) -> f64;
     fn finished(&mut self, time: FrameInstant) -> bool;
 }
 
@@ -68,19 +70,21 @@ pub trait Instrument: Send {
     fn note(&mut self, voice: u32) -> Box<dyn Note>;
 }
 
+#[derive(Debug)]
 pub enum InstrumentEvent {
     SetParam { param: InstrumentParam },
     NoteEvent { voice: u32, event: NoteEvent },
 }
 
+#[derive(Debug)]
 pub enum NoteEvent {
     Hit {},
     SetParam { param: NoteParam },
     Mute {},
 }
 
-type MySignal = Box<dyn CloneSignal<Frame = f32>>;
-type SignalMaker = Box<dyn Send + Fn(&NoteParams, FrameInstant, f32, &NoteParams, FrameInstant) -> (MySignal, f32)>; // (old_params, old_time, phase, new_params, new_time)
+type MySignal = Box<dyn CloneSignal<Frame = f64>>;
+type SignalMaker = Box<dyn Send + Fn(&NoteParams, FrameInstant, f64, &NoteParams, FrameInstant) -> (MySignal, f64)>; // (old_params, old_time, phase, new_params, new_time)
 type SignalMakerMaker = Box<dyn Send + Fn(u32) -> SignalMaker>; // (sample_rate) -> maker
 
 pub struct HeldButtonInstrument {
@@ -108,18 +112,18 @@ pub struct HeldButtonNote {
     change_pending: bool,
     mute_pending: bool,
     change_params: NoteParams,
-    change_phase: f32,
+    change_phase: f64,
     signal_maker: SignalMaker,
     sample_rate: u32,
 }
 
 impl HeldButtonNote {
-    fn to_fsecs(&self, duration: FrameInstant) -> f32 {
-        (duration as f32) * (self.sample_rate as f32)
+    fn to_fsecs(&self, duration: FrameInstant) -> f64 {
+        (duration as f64) / (self.sample_rate as f64)
     }
 
     fn from_duration(&self, duration: Duration) -> FrameInstant {
-        (duration.as_secs_f32() / (self.sample_rate as f32)) as FrameInstant
+        (duration.as_secs_f64() * (self.sample_rate as f64)) as FrameInstant
     }
 }
 
@@ -133,13 +137,14 @@ impl Note for HeldButtonNote {
         self.mute_pending = true;
     }
 
-    fn render(&mut self, time: FrameInstant) -> f32 {
+    fn render(&mut self, time: FrameInstant) -> f64 {
         if self.change_pending {
             (self.signal, self.change_phase) = (self.signal_maker)(&self.params, self.change_at, self.change_phase, &self.change_params, time);
             self.params = self.change_params.clone();
             self.change_at = time;
             self.next_frame = time;
             self.change_pending = false;
+            println!("change");
         }
         if self.mute_pending {
             self.mute_at = Some(time);
@@ -156,19 +161,19 @@ impl Note for HeldButtonNote {
         let amp = self.signal.next();
         let adsr = if let Some(release) = self.mute_at {
             if time >= release {
-                (1.0 - self.to_fsecs(time - release) / Duration::from_millis(500).as_secs_f32()) * 0.5
+                (1.0 - self.to_fsecs(time - release) / Duration::from_millis(500).as_secs_f64()) * 0.5
             } else if time < self.from_duration(Duration::from_millis(50)) {
-                self.to_fsecs(time) / Duration::from_millis(50).as_secs_f32()
+                self.to_fsecs(time) / Duration::from_millis(50).as_secs_f64()
             } else if time < self.from_duration(Duration::from_millis(100)) {
-                (1.0 - self.to_fsecs(time - self.from_duration(Duration::from_millis(50))) / Duration::from_millis(50).as_secs_f32()) * 0.5 + 0.5
+                (1.0 - self.to_fsecs(time - self.from_duration(Duration::from_millis(50))) / Duration::from_millis(50).as_secs_f64()) * 0.5 + 0.5
             } else {
                 0.5
             }
         } else {
             if time < self.from_duration(Duration::from_millis(50)) {
-                self.to_fsecs(time) / Duration::from_millis(50).as_secs_f32()
+                self.to_fsecs(time) / Duration::from_millis(50).as_secs_f64()
             } else if time < self.from_duration(Duration::from_millis(100)) {
-                (1.0 - self.to_fsecs(time - self.from_duration(Duration::from_millis(50))) / Duration::from_millis(50).as_secs_f32()) * 0.5 + 0.5
+                (1.0 - self.to_fsecs(time - self.from_duration(Duration::from_millis(50))) / Duration::from_millis(50).as_secs_f64()) * 0.5 + 0.5
             } else {
                 0.5
             }

@@ -10,7 +10,7 @@ pub type FrameInstant = u64;
 const MAX_BUFFER_SPECULATE_SIZE: usize = 1024;
 
 pub struct RenderQueue {
-    pub buffer: dasp::ring_buffer::Bounded<Box<[f32]>>,
+    pub buffer: dasp::ring_buffer::Bounded<Box<[f64]>>,
     pub tail_frame: u64,
     pub last_consumed_size: u64,
 }
@@ -21,7 +21,7 @@ impl RenderQueue {
             buffer: dasp::ring_buffer::Bounded::from_raw_parts(
                 0,
                 0,
-                Box::from([0f32; MAX_BUFFER_SPECULATE_SIZE]),
+                Box::from([0f64; MAX_BUFFER_SPECULATE_SIZE]),
             ),
             last_consumed_size: 0,
             tail_frame: 0,
@@ -58,7 +58,9 @@ pub fn setup_rendering(
             let mut voices = BTreeMap::<(u32, u32), (FrameInstant, Box<dyn Note>)>::new();
             loop {
                 for event in recv.try_iter() {
-                    let Some(event) = event else { return };
+                    let Some(event) = event else { 
+                        return;
+                    };
                     let now = {
                         let mut buf = buf.lock().unwrap();
                         assert!(buf.buffer.drain().all(|_| true));
@@ -119,7 +121,7 @@ pub fn setup_rendering(
                     continue;
                 }
 
-                let mut result = 0f32;
+                let mut result = 0f64;
                 voices.retain(|(_, _), (ts, note)| {
                     if note.finished(retired - *ts) {
                         return false;
@@ -127,6 +129,13 @@ pub fn setup_rendering(
                     result += note.render(now - *ts);
                     true
                 });
+                let result = if result > 1.0 {
+                    1.0
+                } else if result < -1.0 {
+                    -1.0
+                } else {
+                    result
+                };
                 buf.buffer.push(result);
             }
         })

@@ -7,7 +7,7 @@ use crate::render::RenderQueue;
 const MAX_BUFFER_CONSUME_SIZE: usize = 256; // this corresponds to a little more than 5ms at 44100Hz
 const BACKOFF_SLEEP: Duration = Duration::from_millis(1);
 
-pub fn stream_setup_for() -> Result<(cpal::Stream, Arc<Mutex<RenderQueue>>), anyhow::Error>
+pub fn stream_setup_for() -> Result<(cpal::Stream, Arc<Mutex<RenderQueue>>, u32), anyhow::Error>
 where
 {
     let (_host, device, config) = host_device_setup()?;
@@ -50,9 +50,9 @@ pub fn host_device_setup(
 pub fn make_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-) -> Result<(cpal::Stream, Arc<Mutex<RenderQueue>>), anyhow::Error>
+) -> Result<(cpal::Stream, Arc<Mutex<RenderQueue>>, u32), anyhow::Error>
 where
-    T: SizedSample + FromSample<f32>,
+    T: SizedSample + FromSample<f64>,
 {
     let num_channels = config.channels as usize;
 
@@ -64,25 +64,31 @@ where
             let buf = buf.clone();
             move |output: &mut [T], info: &cpal::OutputCallbackInfo| {
                 let num_frames = output.len() / num_channels;
-                println!("{num_frames}");
+                //println!("{num_frames}");
                 assert!(num_frames <= MAX_BUFFER_CONSUME_SIZE);
                 loop {
-                    let buf = buf.lock().unwrap();
-                    if buf.buffer.len() >= num_frames {
-                        break;
+                    {
+                        let buf = buf.lock().unwrap();
+                        if buf.buffer.len() >= num_frames {
+                            break;
+                        }
                     }
                     let ts = info.timestamp();
                     if ts.playback.sub(BACKOFF_SLEEP) > Some(ts.callback) {
+                        //println!("waiting");
                         std::thread::sleep(BACKOFF_SLEEP);
                     } else {
+                        //println!("too long!");
                         break;
                     }
                 }
                 let mut buf = buf.lock().unwrap();
 
                 if buf.buffer.len() >= num_frames {
+                    //let mut exemplar = 0.0;
                     for frame in output.chunks_mut(num_channels) {
                         let rawval = buf.buffer.pop().unwrap();
+                        //exemplar = rawval;
                         let value = T::from_sample(rawval);
                         for sample in frame.iter_mut() {
                             *sample = value;
@@ -90,17 +96,18 @@ where
                     }
                     buf.last_consumed_size = num_frames as u64;
                     buf.tail_frame += num_frames as u64;
+                    //println!("{exemplar}");
                 } else {
                     buf.last_consumed_size = 0;
                 }
             }
         },
         |err| {
-            panic!("{:?}", err);
+            println!("Output stream error: {:?}", err);
         },
         None,
     )?;
 
-    Ok((stream, buf))
+    Ok((stream, buf, config.sample_rate.0))
 }
 

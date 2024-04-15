@@ -7,8 +7,10 @@ use std::rc::Rc;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
+use dasp::Signal;
+
 use crate::input::{KeyCode, KeyModifiers};
-use crate::instrument::{Instrument, InstrumentEvent, InstrumentParam, NoteEvent, NoteParam};
+use crate::instrument::{Instrument, InstrumentEvent, InstrumentParam, NoteEvent, NoteParam, HeldButtonInstrument};
 use crate::JamEvent;
 
 pub struct JamConfig {
@@ -16,6 +18,8 @@ pub struct JamConfig {
     current_state: Cell<u32>,
     keyup_actions: RefCell<HashMap<KeyCode, (u32, KeyModifiers)>>,
     inner: RefCell<JamConfigInner>,
+    instruments: Option<Vec<Box<dyn Instrument>>>,
+    sample_rate: u32,
 }
 
 struct JamConfigInner {
@@ -187,18 +191,10 @@ fn make_native_value<'a>(lua: &'a Lua, name: &'static str, value: impl IntoLua<'
 }
 
 impl JamConfig {
-    pub fn new(config: PathBuf) -> anyhow::Result<(JamConfigLua, Vec<Box<dyn Instrument>>)> {
+    pub fn new(config: PathBuf, sample_rate: u32) -> anyhow::Result<(JamConfigLua, Vec<Box<dyn Instrument>>)> {
         let lua = Lua::new();
-        let instruments = vec![];
-        let state_machine = vec![JamState {
-            name: "Normal".to_owned(),
-            keys: HashMap::new(),
-            default: JamStateKeyAction {
-                effect: KeyCallback(Box::new(|_, _, _| Ok(()))),
-                effect_up: None,
-                state: 0,
-            },
-        }];
+        lua.globals().raw_set("native", lua.create_table().unwrap()).unwrap();
+        let state_machine = vec![];
         let timers = BTreeMap::new();
         let beats = BTreeMap::new();
         let result = Rc::new(RefCell::new(Self {
@@ -210,6 +206,8 @@ impl JamConfig {
                 beats,
                 submission: mpsc::channel().0,
             }),
+            instruments: Some(vec![]),
+            sample_rate,
         }));
 
         lua.set_app_data(result.clone());
@@ -240,7 +238,14 @@ impl JamConfig {
         make_native_func_callback(&lua, "play", JamConfigInner::native_play);
         make_native_func_callback(&lua, "mute", JamConfigInner::native_mute);
 
-        lua.load(read(config)?).exec()?;
+        let lib_chunk = lua.load(include_str!("lua/lib.lua")).set_name("vijam:lib.lua");
+        let lib = lib_chunk.call::<_, HashMap<String, LuaValue>>(())?;
+        for (k, v) in lib.into_iter() {
+            lua.globals().raw_set(k, v).unwrap();
+        }
+        lua.load(read(&config)?).set_name(config.to_string_lossy()).exec()?;
+
+        let instruments = result.borrow_mut().instruments.take().unwrap();
 
         Ok((JamConfigLua { inner: result, lua }, instruments))
     }
@@ -298,33 +303,50 @@ impl JamConfig {
     fn native_make_instrument(
         &mut self,
         lua: &Lua,
-        (instrument, signal): (u32, u32),
+        (envelope, signal): (u32, u32),
     ) -> LuaResult<u32> {
-        todo!()
+        let instruments = self.instruments.as_mut().unwrap();
+        instruments.push(Box::new(HeldButtonInstrument::new(self.sample_rate, Box::new(move |sample_rate| {
+            Box::new(move |old_params, old_frame, old_phase, new_params, new_frame| {
+                let samples_per_phase = sample_rate as f64 / old_params.pitch;
+                let phase_advance = (new_frame - old_frame) as f64 / samples_per_phase;
+                let new_phase = (old_phase + phase_advance) % 1.0;
+
+                let mut signal = dasp::signal::rate(sample_rate as f64).const_hz(new_params.pitch as f64).sine().scale_amp(new_params.amplitude);
+
+                // HORRIBLE HACK
+                for _ in 0..((new_phase * samples_per_phase) as usize) {
+                    signal.next();
+                }
+                (Box::new(signal), new_phase)
+            })
+        }))));
+        Ok(instruments.len() as u32 - 1)
     }
 
     fn native_make_mode(
         &mut self,
         _lua: &Lua,
-        (name, default_target, default_action): (String, u32, KeyCallback),
+        (name, default_target, default_action): (String, Option<u32>, Option<KeyCallback>),
     ) -> LuaResult<u32> {
-        let result = self.state_machine.len();
+        let result = self.state_machine.len() as u32;
+        let default_target = default_target.unwrap_or(result);
         self.state_machine.push(JamState {
             name,
             keys: HashMap::new(),
             default: JamStateKeyAction {
-                effect: default_action,
+                effect: default_action.unwrap_or(KeyCallback(Box::new(|_, _, _| Ok(())))),
                 effect_up: None,
                 state: default_target,
             },
         });
-        Ok(result as u32)
+        Ok(result)
     }
 
     fn native_make_play<'a>(
         &mut self,
         _lua: &'a Lua,
-        (instrument, pitch, voice, duration): (u32, Option<f32>, Option<u32>, Option<f32>),
+        (instrument, pitch, voice, duration): (u32, Option<f64>, Option<u32>, Option<f64>),
     ) -> LuaResult<KeyCallback> {
         Ok(KeyCallback(Box::new(move |cfg, lua, _key| {
             cfg.native_play(lua, (instrument, pitch, voice, duration))
@@ -471,8 +493,8 @@ fn parse_keyspec_code(text: &str) -> Result<KeyChord, KeyspecParseError> {
         "`" => (Backquote, KeyModifiers::empty()),
         "<DASH>" => (Minus, KeyModifiers::empty()),
         "=" => (Equal, KeyModifiers::empty()),
-        "{" => (BracketLeft, KeyModifiers::empty()),
-        "}" => (BracketRight, KeyModifiers::empty()),
+        "[" => (BracketLeft, KeyModifiers::empty()),
+        "]" => (BracketRight, KeyModifiers::empty()),
         "\\" => (Backslash, KeyModifiers::empty()),
         _ => return Err(KeyspecParseError::BadKey(text.to_owned())),
     };
@@ -545,8 +567,8 @@ fn fmt_keyspec(keyspec: KeyChord) -> String {
         Backquote => "`",
         Minus => "<DASH>",
         Equal => "=",
-        BracketLeft => "{",
-        BracketRight => "}",
+        BracketLeft => "[",
+        BracketRight => "]",
         Backslash => "\\",
         _ => "<UNK>",
     });
@@ -573,7 +595,7 @@ impl JamConfigInner {
     fn native_play(
         &mut self,
         _lua: &Lua,
-        (instrument, pitch, voice, _duration): (u32, Option<f32>, Option<u32>, Option<f32>),
+        (instrument, pitch, voice, _duration): (u32, Option<f64>, Option<u32>, Option<f64>),
     ) -> LuaResult<()> {
         let voice = voice.unwrap_or(0);
         if let Some(pitch) = pitch {
@@ -620,31 +642,31 @@ impl JamConfigInner {
         Ok(())
     }
 
-    fn native_set_tempo(&mut self, lua: &Lua, (tempo,): (f32,)) -> LuaResult<()> {
-        todo!()
+    fn native_set_tempo(&mut self, lua: &Lua, (tempo,): (f64,)) -> LuaResult<()> {
+        Ok(()) // TODO
     }
 
-    fn native_get_tempo(&mut self, lua: &Lua, (): ()) -> LuaResult<f32> {
-        todo!()
+    fn native_get_tempo(&mut self, lua: &Lua, (): ()) -> LuaResult<f64> {
+        Ok(120.) // TODO
     }
 
     fn native_on_beat(
         &mut self,
         lua: &Lua,
-        (division, callback): (f32, LuaFunction),
+        (division, callback): (f64, LuaFunction),
     ) -> LuaResult<u64> {
-        todo!()
+        Ok(0) // TODO
     }
 
     fn native_on_timeout(
         &mut self,
         lua: &Lua,
-        (time, callback): (f32, LuaFunction),
+        (time, callback): (f64, LuaFunction),
     ) -> LuaResult<u64> {
-        todo!()
+        Ok(0) // TODO
     }
 
     fn native_cancel_timer(&mut self, lua: &Lua, (handle,): (u64,)) -> LuaResult<()> {
-        todo!()
+        Ok(()) // TODO
     }
 }

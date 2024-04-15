@@ -6,6 +6,6 @@ time.OnBeat(4, function ()
 	kicker:play(100)
 end)
 
-for i, key in ipairs({"q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]", "\\"}) do
-	modes.Normal:bind(key, beeper:makeButton(440 * pow(2, i / 12), i))
+for i, key in ipairs({"`", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "<DASH>", "="}) do
+	modes.Normal:bind(key, beeper:makeButton(440 * (2 ^ (i / 12)), i))
 end

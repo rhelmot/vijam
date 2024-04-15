@@ -1,7 +1,7 @@
 local M = {}
 
-local function mkInstrument(baseType, signalType) {
-	id = raw.allocateInstrument(baseType, signalType)
+local function mkInstrument(baseType, signalType)
+	id = native.mkInstrument(baseType, signalType)
 	return {
 		_cls = "instrument",
 		id = id,
@@ -20,7 +20,7 @@ local function mkInstrument(baseType, signalType) {
 			}
 		end,
 	}
-}
+end
 
 M.instruments = {
 	HoldButton = function (signalType) 
